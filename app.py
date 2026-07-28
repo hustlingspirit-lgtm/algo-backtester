@@ -40,7 +40,27 @@ if uploaded_file is not None:
         for filename in z.namelist():
             if filename.endswith(".csv"):
                 with z.open(filename) as f:
-                    data_dict[filename.replace('.csv', '')] = pd.read_csv(f)
+                    df = pd.read_csv(f)
+                    
+                    # Standardize column names dynamically
+                    df.columns = df.columns.str.lower().str.strip()
+                    
+                    # Combine separate date and time columns if they exist
+                    if 'date' in df.columns and 'time' in df.columns:
+                        df['datetime'] = df['date'].astype(str) + " " + df['time'].astype(str)
+                    
+                    # Map variations to strict engine requirements
+                    mapping = {}
+                    for col in df.columns:
+                        if 'open' in col: mapping[col] = 'Open'
+                        elif 'high' in col: mapping[col] = 'High'
+                        elif 'low' in col: mapping[col] = 'Low'
+                        elif 'close' in col or 'ltp' in col: mapping[col] = 'Close'
+                        elif 'vol' in col: mapping[col] = 'Volume'
+                        elif 'date' in col or 'time' in col: mapping[col] = 'Datetime'
+                    
+                    df = df.rename(columns=mapping)
+                    data_dict[filename.replace('.csv', '')] = df
 else:
     st.info("Upload a ZIP file containing your CSVs to proceed.")
 
@@ -75,4 +95,4 @@ if data_dict and st.button("Run Backtest"):
             st.dataframe(styled_df, use_container_width=True)
         else:
             st.warning("No trades executed with the current parameters.")
-          
+            
