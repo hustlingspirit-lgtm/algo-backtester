@@ -23,15 +23,20 @@ def calculate_indicators(df, ema1_period, ema2_period):
     daily['R1'] = (2 * daily['P']) - daily['Low'].shift(1)
     daily['S1'] = (2 * daily['P']) - daily['High'].shift(1)
     
-    # Bypass Pandas merge completely to eliminate the ValueError
+    # Pure Python Dictionary Lookup - 100% bypasses Pandas merge errors
     daily.index = daily.index.strftime('%Y-%m-%d')
-    df['date_str'] = df.index.strftime('%Y-%m-%d')
+    pdh_dict = daily['PDH'].to_dict()
+    pdl_dict = daily['PDL'].to_dict()
+    p_dict = daily['P'].to_dict()
+    r1_dict = daily['R1'].to_dict()
+    s1_dict = daily['S1'].to_dict()
     
-    df['PDH'] = df['date_str'].map(daily['PDH'])
-    df['PDL'] = df['date_str'].map(daily['PDL'])
-    df['P'] = df['date_str'].map(daily['P'])
-    df['R1'] = df['date_str'].map(daily['R1'])
-    df['S1'] = df['date_str'].map(daily['S1'])
+    df['date_str'] = df.index.strftime('%Y-%m-%d')
+    df['PDH'] = df['date_str'].apply(lambda x: pdh_dict.get(x))
+    df['PDL'] = df['date_str'].apply(lambda x: pdl_dict.get(x))
+    df['P'] = df['date_str'].apply(lambda x: p_dict.get(x))
+    df['R1'] = df['date_str'].apply(lambda x: r1_dict.get(x))
+    df['S1'] = df['date_str'].apply(lambda x: s1_dict.get(x))
     
     df.drop(columns=['date_str'], inplace=True)
     return df.reset_index()
