@@ -4,7 +4,7 @@ from datetime import time
 def calculate_indicators(df, ema1_period, ema2_period):
     df = df.copy()
     if 'Datetime' in df.columns:
-        df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
+        df['Datetime'] = pd.to_datetime(df['Datetime'], format='mixed', utc=True)
         df.set_index("Datetime", inplace=True)
     
     df['EMA1'] = df['Close'].ewm(span=ema1_period, adjust=False).mean()
@@ -23,10 +23,11 @@ def calculate_indicators(df, ema1_period, ema2_period):
     daily['R1'] = (2 * daily['P']) - daily['Low'].shift(1)
     daily['S1'] = (2 * daily['P']) - daily['High'].shift(1)
     
-    daily.index = daily.index.normalize()
-    df['join_date'] = df.index.normalize()
+    # Convert index to plain text strings to guarantee a safe merge
+    daily.index = daily.index.strftime('%Y-%m-%d')
+    df['join_date'] = df.index.strftime('%Y-%m-%d')
     
-    df = df.join(daily[['PDH', 'PDL', 'P', 'R1', 'S1']], on='join_date', how='left')
+    df = df.merge(daily[['PDH', 'PDL', 'P', 'R1', 'S1']], left_on='join_date', right_index=True, how='left')
     df.drop(columns=['join_date'], inplace=True)
     
     return df.reset_index()
@@ -96,4 +97,4 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     if not trades_df.empty:
         trades_df['Net PnL'] = trades_df['Gross PnL'] - (trades_df['Entry Price'] * 0.00025) - (trades_df['Exit Price'] * 0.00025)
     return trades_df
-    
+                
