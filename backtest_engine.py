@@ -4,7 +4,7 @@ from datetime import time
 def calculate_indicators(df, ema1_period, ema2_period):
     df = df.copy()
     if 'Datetime' in df.columns:
-        df['Datetime'] = pd.to_datetime(df['Datetime'], format='mixed', utc=True)
+        df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
         df.set_index("Datetime", inplace=True)
     
     df['EMA1'] = df['Close'].ewm(span=ema1_period, adjust=False).mean()
@@ -23,13 +23,17 @@ def calculate_indicators(df, ema1_period, ema2_period):
     daily['R1'] = (2 * daily['P']) - daily['Low'].shift(1)
     daily['S1'] = (2 * daily['P']) - daily['High'].shift(1)
     
-    # Convert index to plain text strings to guarantee a safe merge
+    # Bypass Pandas merge completely to eliminate the ValueError
     daily.index = daily.index.strftime('%Y-%m-%d')
-    df['join_date'] = df.index.strftime('%Y-%m-%d')
+    df['date_str'] = df.index.strftime('%Y-%m-%d')
     
-    df = df.merge(daily[['PDH', 'PDL', 'P', 'R1', 'S1']], left_on='join_date', right_index=True, how='left')
-    df.drop(columns=['join_date'], inplace=True)
+    df['PDH'] = df['date_str'].map(daily['PDH'])
+    df['PDL'] = df['date_str'].map(daily['PDL'])
+    df['P'] = df['date_str'].map(daily['P'])
+    df['R1'] = df['date_str'].map(daily['R1'])
+    df['S1'] = df['date_str'].map(daily['S1'])
     
+    df.drop(columns=['date_str'], inplace=True)
     return df.reset_index()
 
 def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, ema1, ema2, atr_mult, rr_ratio):
@@ -97,4 +101,3 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     if not trades_df.empty:
         trades_df['Net PnL'] = trades_df['Gross PnL'] - (trades_df['Entry Price'] * 0.00025) - (trades_df['Exit Price'] * 0.00025)
     return trades_df
-                
