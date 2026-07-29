@@ -1,64 +1,145 @@
-import streamlit as st
 import pandas as pd
-import zipfile
-from backtest_engine import run_strategy
+import numpy as np
 
-st.set_page_config(page_title="Indian Equities Backtesting", layout="wide")
-st.title("📈 Indian Equities Backtesting Dashboard")
-
-st.sidebar.header("Strategy Parameters")
-initial_capital = st.sidebar.number_input("Initial Capital (₹)", min_value=1000, value=100000, step=1000)
-risk_per_trade = st.sidebar.slider("Risk per Trade (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
-
-trade_direction = st.sidebar.radio("Trade Direction", ["Both", "Long Only", "Short Only"])
-allow_long = trade_direction in ["Both", "Long Only"]
-allow_short = trade_direction in ["Both", "Short Only"]
-
-st.sidebar.header("Indicator Settings")
-atr_mult = st.sidebar.slider("ATR Multiplier (SL)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
-rr_ratio = st.sidebar.slider("Target R:R Ratio", min_value=1.0, max_value=5.0, value=2.0, step=0.1)
-
-uploaded_file = st.file_uploader("Upload .zip with 5-min CSVs", type="zip")
-
-if st.button("Run Backtest"):
-    if uploaded_file is not None:
-        data_dict = {}
-        with zipfile.ZipFile(uploaded_file, 'r') as z:
-            for filename in z.namelist():
-                if filename.endswith('.csv'):
-                    with z.open(filename) as f:
-                        df = pd.read_csv(f)
-                        data_dict[filename.replace('.csv', '')] = df
+def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, ema_period, vol_period, atr_mult, rr_ratio):
+    all_trades = []
+    
+    for symbol, df in data_dict.items():
+        df.columns = df.columns.str.strip().str.lower()
         
-        if data_dict:
-            try:
-                trades_df = run_strategy(
-                    data_dict, initial_capital, risk_per_trade, 
-                    allow_long, allow_short, 10, 20, atr_mult, rr_ratio
-                )
+        # Safely parse Date and Time
+        if 'datetime' not in df.columns:
+            if 'date' in df.columns and 'time' in df.columns:
+                df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
+            elif 'timestamp' in df.columns:
+                df['datetime'] = pd.to_datetime(df['timestamp'])
+            elif 'date' in df.columns:
+                df['datetime'] = pd.to_datetime(df['date'])
+            elif 'time' in df.columns:
+                df['datetime'] = pd.to_datetime(df['time'])
+            else:
+                continue
+
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = df.sort_values('datetime').reset_index(drop=True)
+        
+        # Original Indicators
+        df['ATR'] = calculate_atr(df, 14)
+        df['Vol_SMA'] = df['volume'].rolling(window=vol_period).mean()
+        df['EMA'] = df['close'].ewm(span=ema_period, adjust=False).mean()
+        
+        df['date_only'] = df['datetime'].dt.date
+        current_capital = initial_capital
+        
+        for date_val, group in df.groupby('date_only'):
+            # 09:15 to 09:59 Opening Range
+            morning_session = group[(group['datetime'].dt.time >= pd.to_datetime('09:15').time()) & 
+                                      (group['datetime'].dt.time <= pd.to_datetime('09:59').time())]
+            
+            if morning_session.empty:
+                continue
                 
-                if trades_df.empty:
-                    st.warning("No trades generated with current parameters.")
+            or_high = morning_session['high'].max()
+            or_low = morning_session['low'].min()
+            
+            # 10:00 to 14:30 Trading Window
+            trading_session = group[(group['datetime'].dt.time >= pd.to_datetime('10:00').time()) & 
+                                      (group['datetime'].dt.time <= pd.to_datetime('14:30').time())]
+            
+            in_position = False
+            
+            for idx, row in trading_session.iterrows():
+                if in_position:
+                    if direction == 'Long':
+                        if row['low'] <= stop_loss:
+                            exit_price = stop_loss
+                            exit_time = row['datetime']
+                            reason = 'Stop Loss'
+                            in_position = False
+                        elif row['high'] >= target:
+                            exit_price = target
+                            exit_time = row['datetime']
+                            reason = 'Target'
+                            in_position = False
+                        elif row['datetime'].time() >= pd.to_datetime('15:15').time():
+                            exit_price = row['close']
+                            exit_time = row['datetime']
+                            reason = 'Time Square-off'
+                            in_position = False
+                    else: # Short
+                        if row['high'] >= stop_loss:
+                            exit_price = stop_loss
+                            exit_time = row['datetime']
+                            reason = 'Stop Loss'
+                            in_position = False
+                        elif row['low'] <= target:
+                            exit_price = target
+                            exit_time = row['datetime']
+                            reason = 'Target'
+                            in_position = False
+                        elif row['datetime'].time() >= pd.to_datetime('15:15').time():
+                            exit_price = row['close']
+                            exit_time = row['datetime']
+                            reason = 'Time Square-off'
+                            in_position = False
+                    
+                    if not in_position:
+                        net_pnl = (exit_price - entry_price) * qty if direction == 'Long' else (entry_price - exit_price) * qty
+                        # Deduct fixed friction (15) to calculate Net PnL as required by app.py
+                        net_pnl -= 15 
+                        
+                        all_trades.append({
+                            'Symbol': symbol,
+                            'Direction': direction,
+                            'Entry Time': entry_time,
+                            'Entry Price': entry_price,
+                            'Exit Time': exit_time,
+                            'Exit Price': exit_price,
+                            'Reason': reason,
+                            'Net PnL': net_pnl,
+                            'Quantity': qty
+                        })
                 else:
-                    net_profit = trades_df['Net PnL'].sum()
-                    win_rate = (len(trades_df[trades_df['Net PnL'] > 0]) / len(trades_df)) * 100
-                    gross_profit = trades_df[trades_df['Net PnL'] > 0]['Net PnL'].sum()
-                    gross_loss = abs(trades_df[trades_df['Net PnL'] < 0]['Net PnL'].sum())
-                    profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
-                    total_trades = len(trades_df)
+                    if pd.isna(row['ATR']) or pd.isna(row['Vol_SMA']) or pd.isna(row['EMA']):
+                        continue
+                        
+                    is_volume_high = row['volume'] > row['Vol_SMA']
                     
-                    cum_pnl = trades_df['Net PnL'].cumsum()
-                    max_drawdown = ((cum_pnl.cummax() - cum_pnl) / (initial_capital + cum_pnl.cummax()) * 100).max()
-                    
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    col1.metric("Net Profit (₹)", f"₹{net_profit:.2f}")
-                    col2.metric("Win Rate", f"{win_rate:.2f}%")
-                    col3.metric("Profit Factor", f"{profit_factor:.2f}")
-                    col4.metric("Max Drawdown", f"{max_drawdown:.2f}%")
-                    col5.metric("Total Trades", total_trades)
-                    
-                    st.dataframe(trades_df)
-            except Exception as e:
-                st.error(f"Error during backtest: {e}")
-    else:
-        st.error("Please upload a .zip file first.")
+                    # Long Entry
+                    if allow_long and (row['close'] > or_high) and (row['close'] > row['EMA']) and is_volume_high:
+                        direction = 'Long'
+                        entry_price = row['close']
+                        entry_time = row['datetime']
+                        stop_loss = entry_price - (row['ATR'] * atr_mult)
+                        risk_per_share = entry_price - stop_loss
+                        
+                        if risk_per_share > 0:
+                            target = entry_price + (risk_per_share * rr_ratio)
+                            risk_amount = current_capital * (risk_per_trade / 100.0)
+                            qty = int(risk_amount / risk_per_share)
+                            if qty > 0:
+                                in_position = True
+                            
+                    # Short Entry
+                    elif allow_short and (row['close'] < or_low) and (row['close'] < row['EMA']) and is_volume_high:
+                        direction = 'Short'
+                        entry_price = row['close']
+                        entry_time = row['datetime']
+                        stop_loss = entry_price + (row['ATR'] * atr_mult)
+                        risk_per_share = stop_loss - entry_price
+                        
+                        if risk_per_share > 0:
+                            target = entry_price - (risk_per_share * rr_ratio)
+                            risk_amount = current_capital * (risk_per_trade / 100.0)
+                            qty = int(risk_amount / risk_per_share)
+                            if qty > 0:
+                                in_position = True
+
+    return pd.DataFrame(all_trades)
+
+def calculate_atr(df, period):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    return ranges.max(axis=1).rolling(period).mean()
