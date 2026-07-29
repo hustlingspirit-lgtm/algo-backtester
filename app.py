@@ -34,7 +34,7 @@ if st.button("Run Backtest"):
             try:
                 trades_df = run_strategy(
                     data_dict, initial_capital, risk_per_trade, 
-                    allow_long, allow_short, 0, 0, atr_mult, rr_ratio
+                    allow_long, allow_short, 10, 20, atr_mult, rr_ratio
                 )
                 
                 if trades_df.empty:
