@@ -5,7 +5,7 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     all_trades = []
     
     for symbol, df in data_dict.items():
-        # --- FIX 1: Safely parse and merge Date and Time columns ---
+        # --- Safely parse and merge Date and Time columns ---
         df.columns = df.columns.str.strip().str.lower()
         
         if 'datetime' not in df.columns:
@@ -35,7 +35,7 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
         df['Cum_Vol'] = df.groupby('date_only')['volume'].cumsum()
         df['VWAP'] = df['Cum_TPV'] / df['Cum_Vol']
         
-        # --- FIX 2: Shift VWAP only within the same day ---
+        # Shift VWAP only within the same day
         df['VWAP_Prev_3'] = df.groupby('date_only')['VWAP'].shift(3)
         df['VWAP_Rising'] = df['VWAP'] > df['VWAP_Prev_3']
         df['VWAP_Falling'] = df['VWAP'] < df['VWAP_Prev_3']
@@ -77,7 +77,7 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
                             exit_time = row['datetime']
                             reason = 'Target'
                             in_position = False
-                        elif row['datetime'].dt.time >= pd.to_datetime('15:15').time():
+                        elif row['datetime'].time() >= pd.to_datetime('15:15').time(): # <-- FIXED HERE (Removed .dt)
                             exit_price = row['close']
                             exit_time = row['datetime']
                             reason = 'Time Square-off'
@@ -93,7 +93,7 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
                             exit_time = row['datetime']
                             reason = 'Target'
                             in_position = False
-                        elif row['datetime'].dt.time >= pd.to_datetime('15:15').time():
+                        elif row['datetime'].time() >= pd.to_datetime('15:15').time(): # <-- FIXED HERE (Removed .dt)
                             exit_price = row['close']
                             exit_time = row['datetime']
                             reason = 'Time Square-off'
