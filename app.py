@@ -3,8 +3,8 @@ import pandas as pd
 import zipfile
 from backtest_engine import run_strategy
 
-st.set_page_config(page_title="V-ORB Strategy Dashboard", layout="wide")
-st.title("⚡ V-ORB Strategy Backtesting Dashboard")
+st.set_page_config(page_title="Indian Equities Backtesting", layout="wide")
+st.title("📈 Indian Equities Backtesting Dashboard")
 
 st.sidebar.header("Strategy Parameters")
 initial_capital = st.sidebar.number_input("Initial Capital (₹)", min_value=1000, value=100000, step=1000)
@@ -18,7 +18,7 @@ st.sidebar.header("Indicator Settings")
 atr_mult = st.sidebar.slider("ATR Multiplier (SL)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 rr_ratio = st.sidebar.slider("Target R:R Ratio", min_value=1.0, max_value=5.0, value=2.0, step=0.1)
 
-uploaded_file = st.sidebar.file_uploader("Upload .zip with 5-min CSVs", type="zip")
+uploaded_file = st.file_uploader("Upload .zip with 5-min CSVs", type="zip")
 
 if st.button("Run Backtest"):
     if uploaded_file is not None:
@@ -32,7 +32,6 @@ if st.button("Run Backtest"):
         
         if data_dict:
             try:
-                # Passes dummy parameters for ema_period/vol_period to maintain positional alignment with the engine
                 trades_df = run_strategy(
                     data_dict, initial_capital, risk_per_trade, 
                     allow_long, allow_short, 10, 20, atr_mult, rr_ratio
