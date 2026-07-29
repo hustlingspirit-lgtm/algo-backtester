@@ -1,125 +1,145 @@
 import pandas as pd
-from datetime import time
+import numpy as np
 
-def calculate_indicators(df):
-    df = df.copy()
-    if 'Datetime' in df.columns:
-        df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
-        df.set_index("Datetime", inplace=True)
-        
-    df['Time'] = df.index.time
-    df['Date_Str'] = df.index.strftime('%Y-%m-%d')
-    
-    # ATR Calculation
-    df['H-L'] = df['High'] - df['Low']
-    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
-    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
-    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
-    df['ATR'] = df['TR'].rolling(14).mean()
-    
-    # Volume SMA Filter
-    if 'Volume' in df.columns:
-        df['Vol_SMA'] = df['Volume'].rolling(20).mean()
-    else:
-        df['Vol_SMA'] = 0
-        df['Volume'] = 0
-        
-    # VWAP Calculation (Daily Reset)
-    df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['TP_V'] = df['Typical_Price'] * df['Volume']
-    df['Cum_Vol'] = df.groupby('Date_Str')['Volume'].cumsum()
-    df['Cum_TP_V'] = df.groupby('Date_Str')['TP_V'].cumsum()
-    df['VWAP'] = df['Cum_TP_V'] / df['Cum_Vol']
-    
-    # Opening Range High/Low (09:15 to 09:55)
-    or_data = df[(df['Time'] >= time(9, 15)) & (df['Time'] < time(10, 0))]
-    or_high_dict = or_data.groupby('Date_Str')['High'].max().to_dict()
-    or_low_dict = or_data.groupby('Date_Str')['Low'].min().to_dict()
-    
-    df['OR_High'] = df['Date_Str'].apply(lambda x: or_high_dict.get(x, None))
-    df['OR_Low'] = df['Date_Str'].apply(lambda x: or_low_dict.get(x, None))
-    
-    return df.reset_index()
-
-def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, ema1, ema2, atr_mult, rr_ratio):
-    # Note: ema1 and ema2 are passed from app.py but ignored for this strategy
-    vol_mult = 1.5 
-    trades = []
+def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, atr_mult, rr_ratio):
+    all_trades = []
     
     for symbol, df in data_dict.items():
-        if df.empty or 'Volume' not in df.columns:
-            continue
-            
-        df = calculate_indicators(df)
-        in_trade = False
-        trade_dir = 0
-        entry_price = 0
-        sl = 0
-        target = 0
-        entry_time = None
-        qty = 0
+        # Ensure correct column formatting and sorting
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = df.sort_values('datetime').reset_index(drop=True)
         
-        for i in range(1, len(df)):
-            row = df.iloc[i]
-            current_time = row['Datetime'].time()
+        # Calculate Indicators
+        df['ATR'] = calculate_atr(df, 14)
+        df['Vol_SMA'] = df['volume'].rolling(window=20).mean()
+        
+        # Calculate VWAP (assuming typical price * volume cumulative sum divided by cumulative volume per day)
+        df['date'] = df['datetime'].dt.date
+        df['TP'] = (df['high'] + df['low'] + df['close']) / 3
+        df['TPV'] = df['TP'] * df['volume']
+        df['Cum_TPV'] = df.groupby('date')['TPV'].cumsum()
+        df['Cum_Vol'] = df.groupby('date')['volume'].cumsum()
+        df['VWAP'] = df['Cum_TPV'] / df['Cum_Vol']
+        
+        # VWAP Slope (Current VWAP > VWAP 3 periods ago)
+        df['VWAP_Prev_3'] = df['VWAP'].shift(3)
+        df['VWAP_Rising'] = df['VWAP'] > df['VWAP_Prev_3']
+        df['VWAP_Falling'] = df['VWAP'] < df['VWAP_Prev_3']
+        
+        # Group by date to calculate Opening Range (09:15 to 09:59)
+        current_capital = initial_capital
+        
+        for date, group in df.groupby('date'):
+            # Skip Thursdays (Expiry manipulation filter)
+            if pd.to_datetime(date).day_name() == 'Thursday':
+                continue
+                
+            morning_session = group[(group['datetime'].dt.time >= pd.to_datetime('09:15').time()) & 
+                                      (group['datetime'].dt.time <= pd.to_datetime('09:59').time())]
             
-            # Auto Square-Off at 15:15
-            if in_trade and current_time >= time(15, 15):
-                exit_price = row['Close']
-                pnl = (exit_price - entry_price) * qty if trade_dir == 1 else (entry_price - exit_price) * qty
-                trades.append([symbol, "Long" if trade_dir==1 else "Short", entry_time, entry_price, row['Datetime'], exit_price, "Time Exit", pnl])
-                in_trade = False
+            if morning_session.empty:
                 continue
                 
-            # Trade Management
-            if in_trade:
-                if trade_dir == 1:
-                    if row['Low'] <= sl:
-                        trades.append([symbol, "Long", entry_time, entry_price, row['Datetime'], sl, "SL Hit", (sl - entry_price) * qty])
-                        in_trade = False
-                    elif row['High'] >= target:
-                        trades.append([symbol, "Long", entry_time, entry_price, row['Datetime'], target, "Target Hit", (target - entry_price) * qty])
-                        in_trade = False
-                elif trade_dir == -1:
-                    if row['High'] >= sl:
-                        trades.append([symbol, "Short", entry_time, entry_price, row['Datetime'], sl, "SL Hit", (entry_price - sl) * qty])
-                        in_trade = False
-                    elif row['Low'] <= target:
-                        trades.append([symbol, "Short", entry_time, entry_price, row['Datetime'], target, "Target Hit", (entry_price - target) * qty])
-                        in_trade = False
-                continue
-                
-            # Entry Logic (10:00 to 14:30)
-            if time(10, 0) <= current_time <= time(14, 30):
-                if pd.isna(row['OR_High']) or pd.isna(row['VWAP']) or pd.isna(row['Vol_SMA']):
-                    continue
+            or_high = morning_session['high'].max()
+            or_low = morning_session['low'].min()
+            
+            # Trading Session (12:00 PM to 02:30 PM)
+            trading_session = group[(group['datetime'].dt.time >= pd.to_datetime('12:00').time()) & 
+                                      (group['datetime'].dt.time <= pd.to_datetime('02:30').time())]
+            
+            in_position = False
+            
+            for idx, row in trading_session.iterrows():
+                if in_position:
+                    # Check exit conditions for active trade
+                    if direction == 'Long':
+                        if row['low'] <= stop_loss:
+                            exit_price = stop_loss
+                            exit_time = row['datetime']
+                            reason = 'Stop Loss'
+                            in_position = False
+                        elif row['high'] >= target:
+                            exit_price = target
+                            exit_time = row['datetime']
+                            reason = 'Target'
+                            in_position = False
+                        elif row['datetime'].dt.time >= pd.to_datetime('15:15').time():
+                            exit_price = row['close']
+                            exit_time = row['datetime']
+                            reason = 'Time Square-off'
+                            in_position = False
+                    else: # Short
+                        if row['high'] >= stop_loss:
+                            exit_price = stop_loss
+                            exit_time = row['datetime']
+                            reason = 'Stop Loss'
+                            in_position = False
+                        elif row['low'] <= target:
+                            exit_price = target
+                            exit_time = row['datetime']
+                            reason = 'Target'
+                            in_position = False
+                        elif row['datetime'].dt.time >= pd.to_datetime('15:15').time():
+                            exit_price = row['close']
+                            exit_time = row['datetime']
+                            reason = 'Time Square-off'
+                            in_position = False
                     
-                vol_condition = row['Volume'] > (row['Vol_SMA'] * vol_mult)
-                
-                # Long Condition
-                if allow_long and row['Close'] > row['OR_High'] and row['Close'] > row['VWAP'] and vol_condition:
-                    in_trade = True
-                    trade_dir = 1
-                    entry_price = row['Close']
-                    entry_time = row['Datetime']
-                    sl = entry_price - (row['ATR'] * atr_mult)
-                    risk_amount = initial_capital * (risk_per_trade / 100)
-                    qty = risk_amount / (entry_price - sl) if (entry_price - sl) > 0 else 0
-                    target = entry_price + ((entry_price - sl) * rr_ratio)
+                    if not in_position:
+                        # Record trade
+                        gross_pnl = (exit_price - entry_price) * qty if direction == 'Long' else (entry_price - exit_price) * qty
+                        all_trades.append({
+                            'Symbol': symbol,
+                            'Direction': direction,
+                            'Entry Time': entry_time,
+                            'Entry Price': entry_price,
+                            'Exit Time': exit_time,
+                            'Exit Price': exit_price,
+                            'Reason': reason,
+                            'Gross PnL': gross_pnl,
+                            'Quantity': qty
+                        })
+                else:
+                    # Look for new entry
+                    if pd.isna(row['ATR']) or pd.isna(row['Vol_SMA']) or pd.isna(row['VWAP_Prev_3']):
+                        continue
+                        
+                    is_volume_high = row['volume'] > (1.5 * row['Vol_SMA'])
                     
-                # Short Condition
-                elif allow_short and row['Close'] < row['OR_Low'] and row['Close'] < row['VWAP'] and vol_condition:
-                    in_trade = True
-                    trade_dir = -1
-                    entry_price = row['Close']
-                    entry_time = row['Datetime']
-                    sl = entry_price + (row['ATR'] * atr_mult)
-                    risk_amount = initial_capital * (risk_per_trade / 100)
-                    qty = risk_amount / (sl - entry_price) if (sl - entry_price) > 0 else 0
-                    target = entry_price - ((sl - entry_price) * rr_ratio)
-                    
-    trades_df = pd.DataFrame(trades, columns=["Symbol", "Direction", "Entry Time", "Entry Price", "Exit Time", "Exit Price", "Reason", "Gross PnL"])
-    if not trades_df.empty:
-        trades_df['Net PnL'] = trades_df['Gross PnL'] - (trades_df['Entry Price'] * 0.00025) - (trades_df['Exit Price'] * 0.00025)
-    return trades_df
-                                       
+                    # Long Entry
+                    if allow_long and (row['close'] > or_high) and (row['close'] > row['VWAP']) and row['VWAP_Rising'] and is_volume_high:
+                        direction = 'Long'
+                        entry_price = row['close']
+                        entry_time = row['datetime']
+                        stop_loss = entry_price - (row['ATR'] * atr_mult)
+                        risk_per_share = entry_price - stop_loss
+                        target = entry_price + (risk_per_share * rr_ratio)
+                        
+                        risk_amount = current_capital * (risk_per_trade / 100.0)
+                        qty = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
+                        if qty > 0:
+                            in_position = True
+                            
+                    # Short Entry
+                    elif allow_short and (row['close'] < or_low) and (row['close'] < row['VWAP']) and row['VWAP_Falling'] and is_volume_high:
+                        direction = 'Short'
+                        entry_price = row['close']
+                        entry_time = row['datetime']
+                        stop_loss = entry_price + (row['ATR'] * atr_mult)
+                        risk_per_share = stop_loss - entry_price
+                        target = entry_price - (risk_per_share * rr_ratio)
+                        
+                        risk_amount = current_capital * (risk_per_trade / 100.0)
+                        qty = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
+                        if qty > 0:
+                            in_position = True
+
+    return pd.DataFrame(all_trades)
+
+def calculate_atr(df, period):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    return true_range.rolling(period).mean()
