@@ -3,8 +3,19 @@ from datetime import time
 
 def calculate_indicators(df):
     df = df.copy()
+    
+    # Standardize essential column names to match expected casing
+    rename_map = {col: col.capitalize() for col in df.columns if col.lower() in ['datetime', 'open', 'high', 'low', 'close', 'volume']}
+    df.rename(columns=rename_map, inplace=True)
+    
     if 'Datetime' in df.columns:
-        df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
+        # Convert to datetime and safely strip timezone to preserve local market time
+        df['Datetime'] = pd.to_datetime(df['Datetime'])
+        try:
+            df['Datetime'] = df['Datetime'].dt.tz_localize(None)
+        except TypeError:
+            pass # Already timezone-naive
+            
         df.set_index("Datetime", inplace=True)
         
     df['Time'] = df.index.time
@@ -47,6 +58,10 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     trades = []
     
     for symbol, df in data_dict.items():
+        # Ensure column standardization happens before the Volume check
+        rename_map = {col: col.capitalize() for col in df.columns if col.lower() in ['datetime', 'open', 'high', 'low', 'close', 'volume']}
+        df.rename(columns=rename_map, inplace=True)
+        
         if df.empty or 'Volume' not in df.columns:
             continue
             
