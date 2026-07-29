@@ -1,21 +1,29 @@
 import pandas as pd
 from datetime import time
 
+def standardize_data(df):
+    # Catch alternative date/time column names and rename to 'Datetime'
+    for col in df.columns:
+        if col.lower() in ['date', 'datetime', 'time', 'timestamp']:
+            df.rename(columns={col: 'Datetime'}, inplace=True)
+            break
+            
+    # Standardize OHLCV columns to capitalized format
+    rename_map = {col: col.capitalize() for col in df.columns if col.lower() in ['open', 'high', 'low', 'close', 'volume']}
+    df.rename(columns=rename_map, inplace=True)
+    return df
+
 def calculate_indicators(df):
     df = df.copy()
-    
-    # Standardize essential column names to match expected casing
-    rename_map = {col: col.capitalize() for col in df.columns if col.lower() in ['datetime', 'open', 'high', 'low', 'close', 'volume']}
-    df.rename(columns=rename_map, inplace=True)
+    df = standardize_data(df)
     
     if 'Datetime' in df.columns:
-        # Convert to datetime and safely strip timezone to preserve local market time
+        # Convert to datetime and strip timezone to preserve local market time
         df['Datetime'] = pd.to_datetime(df['Datetime'])
         try:
             df['Datetime'] = df['Datetime'].dt.tz_localize(None)
         except TypeError:
-            pass # Already timezone-naive
-            
+            pass
         df.set_index("Datetime", inplace=True)
         
     df['Time'] = df.index.time
@@ -53,16 +61,14 @@ def calculate_indicators(df):
     return df.reset_index()
 
 def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, ema1, ema2, atr_mult, rr_ratio):
-    # Note: ema1 and ema2 are passed from app.py but ignored for this strategy
     vol_mult = 1.5 
     trades = []
     
     for symbol, df in data_dict.items():
-        # Ensure column standardization happens before the Volume check
-        rename_map = {col: col.capitalize() for col in df.columns if col.lower() in ['datetime', 'open', 'high', 'low', 'close', 'volume']}
-        df.rename(columns=rename_map, inplace=True)
+        df = standardize_data(df)
         
-        if df.empty or 'Volume' not in df.columns:
+        # Skip if necessary columns are completely missing
+        if df.empty or 'Volume' not in df.columns or 'Datetime' not in df.columns:
             continue
             
         df = calculate_indicators(df)
@@ -137,4 +143,4 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     if not trades_df.empty:
         trades_df['Net PnL'] = trades_df['Gross PnL'] - (trades_df['Entry Price'] * 0.00025) - (trades_df['Exit Price'] * 0.00025)
     return trades_df
-    
+                
