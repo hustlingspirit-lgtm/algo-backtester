@@ -122,4 +122,4 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     if not trades_df.empty:
         trades_df['Net PnL'] = trades_df['Gross PnL'] - (trades_df['Entry Price'] * 0.00025) - (trades_df['Exit Price'] * 0.00025)
     return trades_df
-        
+    
