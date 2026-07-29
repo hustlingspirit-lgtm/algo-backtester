@@ -5,6 +5,20 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
     all_trades = []
     
     for symbol, df in data_dict.items():
+        # --- NEW: Robust Column Normalization ---
+        df.columns = df.columns.str.strip().str.lower()
+        
+        # Map common time columns to 'datetime'
+        if 'datetime' not in df.columns:
+            if 'date' in df.columns:
+                df = df.rename(columns={'date': 'datetime'})
+            elif 'time' in df.columns:
+                df = df.rename(columns={'time': 'datetime'})
+            elif 'timestamp' in df.columns:
+                df = df.rename(columns={'timestamp': 'datetime'})
+            else:
+                raise ValueError(f"Missing time column in {symbol} data. Found: {list(df.columns)}")
+                
         # Ensure correct column formatting and sorting
         df['datetime'] = pd.to_datetime(df['datetime'])
         df = df.sort_values('datetime').reset_index(drop=True)
@@ -13,12 +27,12 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
         df['ATR'] = calculate_atr(df, 14)
         df['Vol_SMA'] = df['volume'].rolling(window=20).mean()
         
-        # Calculate VWAP (assuming typical price * volume cumulative sum divided by cumulative volume per day)
-        df['date'] = df['datetime'].dt.date
+        # Calculate VWAP
+        df['date_only'] = df['datetime'].dt.date
         df['TP'] = (df['high'] + df['low'] + df['close']) / 3
         df['TPV'] = df['TP'] * df['volume']
-        df['Cum_TPV'] = df.groupby('date')['TPV'].cumsum()
-        df['Cum_Vol'] = df.groupby('date')['volume'].cumsum()
+        df['Cum_TPV'] = df.groupby('date_only')['TPV'].cumsum()
+        df['Cum_Vol'] = df.groupby('date_only')['volume'].cumsum()
         df['VWAP'] = df['Cum_TPV'] / df['Cum_Vol']
         
         # VWAP Slope (Current VWAP > VWAP 3 periods ago)
@@ -26,12 +40,11 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
         df['VWAP_Rising'] = df['VWAP'] > df['VWAP_Prev_3']
         df['VWAP_Falling'] = df['VWAP'] < df['VWAP_Prev_3']
         
-        # Group by date to calculate Opening Range (09:15 to 09:59)
         current_capital = initial_capital
         
-        for date, group in df.groupby('date'):
+        for date_val, group in df.groupby('date_only'):
             # Skip Thursdays (Expiry manipulation filter)
-            if pd.to_datetime(date).day_name() == 'Thursday':
+            if pd.to_datetime(date_val).day_name() == 'Thursday':
                 continue
                 
             morning_session = group[(group['datetime'].dt.time >= pd.to_datetime('09:15').time()) & 
