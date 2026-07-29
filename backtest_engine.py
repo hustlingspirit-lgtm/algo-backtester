@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
 
-def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, ema_period, vol_period, atr_mult, rr_ratio):
+def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_short, atr_mult, rr_ratio):
     all_trades = []
+    
+    # Hardcoded original periods to match the Advanced UI function call
+    ema_period = 10
+    vol_period = 20
     
     for symbol, df in data_dict.items():
         df.columns = df.columns.str.strip().str.lower()
@@ -96,6 +100,7 @@ def run_strategy(data_dict, initial_capital, risk_per_trade, allow_long, allow_s
                             'Exit Time': exit_time,
                             'Exit Price': exit_price,
                             'Reason': reason,
+                            'Gross PnL': net_pnl + 15, # Re-add friction for accurate Gross logging
                             'Net PnL': net_pnl,
                             'Quantity': qty
                         })
